@@ -1,6 +1,6 @@
 # Note Tracker
 
-Note Tracker is a Godot 4.7 editor addon that collects tagged comments from GDScript files in one **Notes** dock.
+Note Tracker is a Godot 4.6+ editor addon that collects tagged comments from GDScript files in one **Notes** dock.
 
 ![Note Tracker dock showing tagged notes](screenshots/Screenshot%202026-11-02%20125543.png)
 

@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="Todo Plugin"
-config/features=PackedStringArray("4.7", "GL Compatibility")
+config/name="Note Tracker Addon"
+config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
 
 [display]
