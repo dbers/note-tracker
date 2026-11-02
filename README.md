@@ -33,3 +33,7 @@ Check a note to remove its comment from the source file. Click the restore icon 
 
 - Create a GitHub issue from a note.
 - Configure which tags appear in the dock.
+
+## License
+
+MIT. See [LICENSE.md](LICENSE.md).
