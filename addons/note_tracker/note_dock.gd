@@ -19,10 +19,12 @@ var notes: Array = []
 var filter := ""
 
 var _filter_bar: HBoxContainer
+var _dropdown: OptionButton
 var _tree: Tree
 var _done_tree: Tree
 var _done_label: Label
 var _rescan_timer: Timer
+
 
 func _ready() -> void:
   name = "Notes"
@@ -111,20 +113,23 @@ func _rebuild_filters() -> void:
   if filter not in tags:
     filter = ""
 
-  var group := ButtonGroup.new()
-  _add_filter_button(group, "", "All (%d)" % notes.size())
+  _dropdown = OptionButton.new()
+  _dropdown.item_selected.connect(_on_filter_item_selected)
+  _dropdown.add_item("Show All")
   for tag in tags:
-    _add_filter_button(group, tag, "%s (%d)" % [tag, counts.get(tag, 0)])
+    _dropdown.add_item(tag)
+    
+  _filter_bar.add_child(_dropdown)
 
-func _add_filter_button(group: ButtonGroup, tag: String, label: String) -> void:
-  var b := Button.new()
-  b.text = label
-  b.toggle_mode = true
-  b.button_group = group
-  b.button_pressed = tag == filter
-  b.pressed.connect(func(): filter = tag; _refresh_notes())
-  _filter_bar.add_child(b)
 
+func _on_filter_item_selected(index: int) -> void:
+  if index == 0:
+    filter = ""
+  else:
+    var selected_text = _dropdown.get_item_text(index)
+    filter = selected_text
+  _refresh_notes()
+  
 func _refresh_notes() -> void:
   _tree.clear()
   var root := _tree.create_item()
@@ -140,7 +145,7 @@ func _refresh_notes() -> void:
 
     _fill_common(item, note, note.line)
     item.set_editable(COL_TEXT, true)
-    item.set_tooltip_text(COL_TEXT, "Double click to edit")
+    item.set_tooltip_text(COL_TEXT, note.text)
 
 func _refresh_done() -> void:
   _done_tree.clear()
