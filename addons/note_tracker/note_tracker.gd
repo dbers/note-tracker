@@ -1,12 +1,17 @@
 @tool
 extends EditorPlugin
 
+
+const GitHubIssues = preload("res://addons/note_tracker/github_issues.gd")
+
 const NoteDock = preload("res://addons/note_tracker/note_dock.gd")
 
 var _dock: EditorDock
 var _panel: NoteDock
 
 func _enter_tree() -> void:
+  GitHubIssues.setup_settings()
+
   _panel = NoteDock.new()
   _dock = EditorDock.new()
   _dock.title = "Notes"

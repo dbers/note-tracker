@@ -2,6 +2,7 @@
 extends VBoxContainer
 # Shows notes by tag and lets you edit, complete, and restore them.
 
+const GitHubIssues = preload("res://addons/note_tracker/github_issues.gd")
 const Scanner = preload("res://addons/note_tracker/scanner.gd")
 const NoteActions = preload("res://addons/note_tracker/note_actions.gd")
 const TAGS: PackedStringArray = ["todo", "hack", "note", "info"]
@@ -18,6 +19,19 @@ var actions := NoteActions.new()
 var notes: Array = []
 var filter := ""
 
+var github := GitHubIssues.new()
+var _issue_dialog: ConfirmationDialog
+var _issue_title: LineEdit
+var _issue_preview: Label
+var _archive_issue: CheckBox
+var _reference_issue: CheckBox
+var _issue_note: Dictionary = {}
+var _request_archive := false
+var _request_reference := false
+var _status: AcceptDialog
+var _token_dialog: AcceptDialog
+var _token_input: LineEdit
+
 var _filter_bar: HBoxContainer
 var _dropdown: OptionButton
 var _tree: Tree
@@ -29,6 +43,11 @@ var _rescan_timer: Timer
 func _ready() -> void:
   name = "Notes"
   size_flags_vertical = SIZE_EXPAND_FILL
+
+  add_child(github)
+  github.finished.connect(_on_issue_finished)
+  _setup_github_dialogs()
+  ProjectSettings.settings_changed.connect(queue_rescan)
 
   var toolbar := HBoxContainer.new()
   add_child(toolbar)
@@ -42,6 +61,15 @@ func _ready() -> void:
   refresh.tooltip_text = "Rescan project"
   refresh.pressed.connect(rescan)
   toolbar.add_child(refresh)
+  var credentials := Button.new()
+  credentials.text = "GitHub"
+  credentials.tooltip_text = "Set or clear the GitHub token for this editor session only"
+  credentials.pressed.connect(func():
+    _token_input.clear()
+    _token_input.placeholder_text = "Token already set; enter a replacement" if not github.token.is_empty() else "Fine-grained personal access token"
+    _token_dialog.popup_centered(Vector2i(460, 160))
+  )
+  toolbar.add_child(credentials)
 
   var split := VSplitContainer.new()
   split.size_flags_vertical = SIZE_EXPAND_FILL
@@ -50,6 +78,7 @@ func _ready() -> void:
   _tree = _make_tree(["", "Tag", "Note", "Location"])
   _tree.set_column_expand(COL_DONE, false)
   _tree.set_column_custom_minimum_width(COL_DONE, 28)
+  _tree.button_clicked.connect(_on_issue_button_clicked)
   _tree.item_edited.connect(_on_item_edited)
   _tree.item_activated.connect(_on_item_activated)
   split.add_child(_tree)
@@ -119,6 +148,7 @@ func _rebuild_filters() -> void:
   for tag in tags:
     _dropdown.add_item(tag)
     
+  _dropdown.select(0 if filter.is_empty() else tags.find(filter) + 1)
   _filter_bar.add_child(_dropdown)
 
 
@@ -146,6 +176,11 @@ func _refresh_notes() -> void:
     _fill_common(item, note, note.line)
     item.set_editable(COL_TEXT, true)
     item.set_tooltip_text(COL_TEXT, note.text)
+    var reference: Dictionary = github.references.get(GitHubIssues.note_key(note), {})
+    if not reference.is_empty():
+      item.add_button(COL_LOCATION, _icon("ExternalLink"), 1, github.busy, "Open linked issue" if reference.has("url") else "Request uncertain: check GitHub before retrying")
+    elif GitHubIssues.setting("enable_github", false):
+      item.add_button(COL_LOCATION, _icon("Add"), 0, github.busy, "Create GitHub issue")
 
 func _refresh_done() -> void:
   _done_tree.clear()
@@ -158,6 +193,10 @@ func _refresh_done() -> void:
     item.set_metadata(0, action)
     item.add_button(0, _icon("UndoRedo"), 0, false, "Restore this comment")
     _fill_common(item, action, int(action.line))
+
+    var reference: Dictionary = action.get("issue_reference", {})
+    if reference.has("url"):
+      item.add_button(COL_LOCATION, _icon("ExternalLink"), 1, false, reference.url)
     item.set_text(4, _ago(now - int(action.time)))
     for col in range(0, 5):
       item.set_custom_color(col, get_theme_color("font_disabled_color", "Editor"))
@@ -168,6 +207,7 @@ func _fill_common(item: TreeItem, comment: Dictionary, line: int) -> void:
   item.set_text(COL_TEXT, comment.text)
   item.set_text(COL_LOCATION, "%s:%d" % [comment.path.trim_prefix("res://"), line + 1])
   item.set_tooltip_text(COL_LOCATION, "Double-click to open")
+
 
 func _on_item_edited() -> void:
   var item := _tree.get_edited()
@@ -182,6 +222,7 @@ func _on_item_edited() -> void:
   # rebuilding the tree inside its own edit signal is unsafe.
   rescan.call_deferred()
 
+
 func _on_item_activated() -> void:
   var item := _tree.get_selected()
   if item == null:
@@ -191,20 +232,27 @@ func _on_item_activated() -> void:
   else:
     _jump(item.get_metadata(0))
 
+
 func _on_done_button_clicked(item: TreeItem, _column: int, _id: int, _mouse: int) -> void:
+  if _id == 1:
+    _open_issue(item.get_metadata(0).get("issue_reference", {}))
+    return
   actions.restore(item.get_metadata(0))
   rescan.call_deferred()
+
 
 func _on_done_activated() -> void:
   var item := _done_tree.get_selected()
   if item:
     _jump(item.get_metadata(0))
 
+
 func _jump(n: Dictionary) -> void:
   var script := load(n.path) as Script
   if script:
     EditorInterface.set_main_screen_editor("Script")
     EditorInterface.edit_script(script, int(n.line) + 1, int(n.get("hash_col", 0)))
+
 
 func _make_tree(titles: Array) -> Tree:
   var tree := Tree.new()
@@ -223,8 +271,10 @@ func _make_tree(titles: Array) -> Tree:
   tree.set_column_custom_minimum_width(COL_LOCATION, 160)
   return tree
 
+
 func _icon(icon_name: String) -> Texture2D:
   return EditorInterface.get_editor_theme().get_icon(icon_name, "EditorIcons")
+
 
 static func _ago(seconds: int) -> String:
   if seconds < 60:
@@ -234,3 +284,151 @@ static func _ago(seconds: int) -> String:
   if seconds < 86400:
     return "%dh ago" % (seconds / 3600)
   return "%dd ago" % (seconds / 86400)
+
+
+func _setup_github_dialogs() -> void:
+  _status = AcceptDialog.new()
+  _status.title = "GitHub issue"
+  add_child(_status)
+
+  _token_dialog = AcceptDialog.new()
+  _token_dialog.title = "GitHub token — session only"
+  var token_box := VBoxContainer.new()
+
+  _token_dialog.add_child(token_box)
+  var help := Label.new()
+  help.text = "Stored in memory only. Use Issues: read and write for your repository."
+  token_box.add_child(help)
+  _token_input = LineEdit.new()
+  _token_input.secret = true
+  _token_input.context_menu_enabled = false
+  token_box.add_child(_token_input)
+  _token_dialog.confirmed.connect(func():
+    if not _token_input.text.strip_edges().is_empty():
+      github.token = _token_input.text.strip_edges()
+    _token_input.clear()
+  )
+  _token_dialog.canceled.connect(func(): _token_input.clear())
+  _token_dialog.add_button("Clear stored token", true, "clear")
+  _token_dialog.custom_action.connect(func(_action: StringName):
+    github.token = ""
+    _token_input.clear()
+    _token_dialog.hide()
+  )
+  add_child(_token_dialog)
+
+  _issue_dialog = ConfirmationDialog.new()
+  _issue_dialog.title = "Create GitHub issue"
+  _issue_dialog.ok_button_text = "Create issue"
+
+  var box := VBoxContainer.new()
+  _issue_dialog.add_child(box)
+  _issue_title = LineEdit.new()
+  _issue_title.max_length = 80
+  box.add_child(_issue_title)
+  _issue_preview = Label.new()
+  _issue_preview.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+  _issue_preview.custom_minimum_size = Vector2(480, 100)
+  box.add_child(_issue_preview)
+  _archive_issue = CheckBox.new()
+  _archive_issue.text = "Archive comment after issue creation"
+  box.add_child(_archive_issue)
+  _reference_issue = CheckBox.new()
+  _reference_issue.text = "Add issue URL to comment (when keeping it active)"
+  box.add_child(_reference_issue)
+  _issue_dialog.confirmed.connect(_create_issue)
+  add_child(_issue_dialog)
+
+
+func _show_github_message(message: String) -> void:
+  _status.dialog_text = message
+  _status.popup_centered(Vector2i(520, 180))
+
+
+func _open_issue(reference: Dictionary) -> void:
+  var url := str(reference.get("url", ""))
+  if url.begins_with("https://github.com/"):
+    OS.shell_open(url)
+
+
+func _on_issue_button_clicked(item: TreeItem, _column: int, _id: int, _mouse: int) -> void:
+  if github.busy:
+    return
+
+  var note: Dictionary = item.get_metadata(0)
+  var key := GitHubIssues.note_key(note)
+  var reference: Dictionary = github.references.get(key, {})
+  if reference.has("url"):
+    _open_issue(reference)
+    return
+  if not reference.is_empty():
+    var recovery := ConfirmationDialog.new()
+    recovery.title = "Check GitHub before retrying"
+    recovery.dialog_text = "The previous request may have created an issue. Check the repository first.\nOnly reset this request if you have confirmed no issue exists."
+    recovery.ok_button_text = "Reset request"
+    recovery.add_button("Open repository", true, "open")
+    recovery.custom_action.connect(func(_action: StringName): OS.shell_open("https://github.com/" + str(reference.repository) + "/issues"))
+    recovery.confirmed.connect(func():
+      github.references.erase(key)
+      github.save()
+      rescan.call_deferred()
+      recovery.queue_free()
+    )
+    recovery.canceled.connect(recovery.queue_free)
+    add_child(recovery)
+    recovery.popup_centered()
+    return
+
+  _issue_note = note.duplicate(true)
+  _issue_title.text = GitHubIssues.issue_title(note.text)
+  _issue_preview.text = "Repository: %s\n\n%s" % [GitHubIssues.setting("github_repository", ""), GitHubIssues.issue_body(note)]
+  _archive_issue.button_pressed = GitHubIssues.setting("should_auto_archive", true)
+  _reference_issue.button_pressed = GitHubIssues.setting("add_issue_reference", true)
+  _issue_dialog.popup_centered(Vector2i(540, 300))
+
+
+func _create_issue() -> void:
+  _request_archive = _archive_issue.button_pressed
+  _request_reference = _reference_issue.button_pressed
+
+  # Do not send a stale comment after the user has edited the file.
+  if actions._open_at(_issue_note) == null:
+    _show_github_message("The comment changed. Rescan and try again.")
+    rescan.call_deferred()
+    return
+  var error := github.create_issue(_issue_note, _issue_title.text)
+  if not error.is_empty():
+    _show_github_message(error)
+  _refresh_notes.call_deferred()
+
+
+func _on_issue_finished(note: Dictionary, reference: Dictionary, message: String) -> void:
+  if reference.is_empty():
+    _show_github_message(message)
+    rescan.call_deferred()
+    return
+  var result_message := "Created " + str(reference.url)
+
+  # If saving the link failed, leave source intact so the user can recover.
+  if not message.is_empty():
+    result_message += "\n" + message
+  elif _request_archive:
+    note.issue_reference = reference
+    if not actions.complete(note):
+      result_message += "\nCould not archive the changed comment. It has been kept active."
+  elif _request_reference:
+    var new_text := "%s [GitHub #%d](%s)" % [note.text, reference.number, reference.url]
+    # Save the future identity before editing, so rescans keep the link.
+    var updated := note.duplicate(true)
+    updated.line_text = str(note.line_text).substr(0, int(note.text_col)) + new_text
+    var new_key := GitHubIssues.note_key(updated)
+    github.references[new_key] = reference
+    if not github.save():
+      github.references.erase(new_key)
+      result_message += "\nCould not save the reference; comment kept unchanged."
+    elif not actions.edit_text(note, new_text):
+      github.references.erase(new_key)
+      github.save()
+      result_message += "\nCould not update the changed comment. The issue link is retained locally."
+  _show_github_message(result_message)
+  rescan.call_deferred()
