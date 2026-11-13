@@ -9,6 +9,7 @@ const MAX_DONE := 50
 
 var done: Array = []
 
+
 func _init() -> void:
   if FileAccess.file_exists(STORE_PATH):
     var data = JSON.parse_string(FileAccess.get_file_as_string(STORE_PATH))
@@ -25,6 +26,7 @@ func clear_done() -> void:
   done.clear()
   save()
 
+
 # Replace the note's text, keeping its `# @tag` prefix.
 func edit_text(note: Dictionary, new_text: String) -> bool:
   new_text = new_text.strip_edges()
@@ -37,6 +39,7 @@ func edit_text(note: Dictionary, new_text: String) -> bool:
   doc.begin()
   doc.set_line(i, note.line_text.substr(0, note.text_col) + new_text)
   return doc.commit()
+
 
 # Remove the comment from source and remember it for restore.
 func complete(note: Dictionary) -> bool:
@@ -57,6 +60,9 @@ func complete(note: Dictionary) -> bool:
     after = doc.lines[i + 1] if i + 1 < doc.lines.size() else "",
     time = int(Time.get_unix_time_from_system()),
   }
+
+  if note.has("issue_reference"):
+    entry.issue_reference = note.issue_reference
   doc.begin()
   if entry.whole_line:
     doc.remove_line(i)
@@ -68,6 +74,7 @@ func complete(note: Dictionary) -> bool:
   done.resize(mini(done.size(), MAX_DONE))
   save()
   return true
+
 
 # Put a completed comment back using nearby lines as anchors.
 func restore(entry: Dictionary) -> bool:
@@ -92,12 +99,14 @@ func restore(entry: Dictionary) -> bool:
   save()
   return true
 
+
 func _open_at(note: Dictionary):
   var doc = SourceDoc.load_doc(note.path)
   if doc == null or doc.find_line(note.line_text, note.line) < 0:
     push_warning("Note Tracker: \"%s\" changed since the last scan; rescanning." % note.text)
     return null
   return doc
+
 
 func _insert_index(lines: PackedStringArray, entry: Dictionary, hint: int) -> int:
   # Don't insert after a file's trailing newline.
